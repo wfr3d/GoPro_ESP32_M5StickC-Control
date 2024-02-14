@@ -1,26 +1,29 @@
+#include <M5StickC.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <WiFiUdp.h>
 #include "GoProCam.h"
 #include "SPI.h"
-#include "TFT_eSPI.h"
+#include "GoPro_M5StickC_RC.h"
 
 //--------------------- GoPro MAC and IP declarations ------------------
 //---change these to yours----------------------------------------------
-uint8_t Cam1Mac[6] = {0xD4, 0x32, 0x60, 0x6D, 0x11, 0xE3}; //HERO-8 //MAC of cam "M-040-01" = 0x04, 0x41, 0x69, 0x4F, 0x0F, 0x4B
+uint8_t Cam1Mac[6] = {0xD4, 0x32, 0x60, 0x94, 0x3B, 0x62}; //HERO-8 //MAC of cam "M-040-01" = 0x04, 0x41, 0x69, 0x4F, 0x0F, 0x4B
 uint8_t Cam2Mac[6] = {0x04, 0x41, 0x69, 0x5E, 0x4A, 0x33}; //HERO-5 "M-040-02"
 uint8_t Cam3Mac[6] = {0x04, 0x41, 0x69, 0x5F, 0x11, 0x39}; //HERO-5 "M-040-03"
 uint8_t Cam4Mac[6] = {0x04, 0x41, 0x69, 0x5F, 0x72, 0x39}; //HERO-5 "M-040-04"
 //---don't change the rest----------------------------------------------
 
 //Program variables ----------------------------------------------------
-const int maxCams = 4;
+const int maxCams = 1;
 uint8_t numConnected = 0;
 uint8_t oldNumConnected = 0;
 uint8_t newConnected = 0;
 uint8_t currentMode = 10;
 int camConTimeout = 5000;
-GoProCam cams[maxCams] = {GoProCam(Cam1Mac), GoProCam(Cam2Mac), GoProCam(Cam3Mac), GoProCam(Cam4Mac)};
+// GoProCam cams[maxCams] = {GoProCam(Cam1Mac), GoProCam(Cam2Mac), GoProCam(Cam3Mac), GoProCam(Cam4Mac)};
+// there is room for only one camera on lcd - sorry
+GoProCam cams[maxCams] = {GoProCam(Cam1Mac)};
 int lowCounter = 0;      // msg counter 1
 int highCounter = 0;     // msg counter 2
 int cmdIndicator = 0;    // last sent cmd indicator
@@ -63,49 +66,52 @@ IPAddress rcIp(10, 71, 79, 1);                    // IP of my Smart-Remote
 IPAddress gateway(10, 71, 79, 1);               // GW of my Smart-Remote
 IPAddress subnet(255, 255, 255, 0);             // SM of my Smart-Remote
 
+// UI State ------------------------------------------------------------
+uint8_t current_ui_action = 0;
+
 //Instances ------------------------------------------------------------
 WiFiUDP Udp;
-TFT_eSPI tft = TFT_eSPI();
-//
 
 //----------------------------------------------------------------------
-void setup() {
-  tft.init();
-  tft.setRotation(1);
-  tft.fillScreen(TFT_BLACK);
-  tft.setCursor(0, 0);
-  tft.setTextColor(TFT_WHITE);  tft.setTextSize(2);
-  tft.println("Start up remote...");
+void setup() {  
 
+  M5.begin();
+  M5.Lcd.setRotation(1);
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.setCursor(0,0);
+  M5.Lcd.setTextColor(TFT_WHITE); M5.Lcd.setTextSize(1);
+  M5.Lcd.println("Start up remote...");
+  
   WiFi.mode(WIFI_AP); // Set WiFi in AP mode
 
-  esp_wifi_set_mac(ESP_IF_WIFI_AP, &rcMac[0]);
+  esp_wifi_set_mac(WIFI_IF_AP, &rcMac[0]);  
 
-  WiFi.onEvent(onIpAssign, WiFiEvent_t::SYSTEM_EVENT_AP_STAIPASSIGNED);
-  WiFi.onEvent(onStationDisconnected, WiFiEvent_t::SYSTEM_EVENT_AP_STADISCONNECTED);
+  WiFi.onEvent(onIpAssign, WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED);
+  WiFi.onEvent(onStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
+
+
 
   WiFi.disconnect(true);
   WiFi.softAPdisconnect(true);
 
   Serial.begin(115200);
 
-  //calibrateTouch(); //uncomment for touch calibration
-  uint16_t calData[5] = { 220, 3479, 332, 3466, 1 }; //comment for touch calibration
-  tft.setTouch(calData); //comment for touch calibration
-
   //setup is done
   delay(250);
   Serial.println("");
   Serial.println("Ready!");
-  tft.fillScreen(TFT_BLACK);
-  tft.setCursor(0, 0);
-  tft.setTextColor(TFT_WHITE);  tft.setTextSize(2);
-  tft.println("Remote ready!");
+
+
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.setTextColor(TFT_WHITE);  M5.Lcd.setTextSize(1);
+  M5.Lcd.println("Remote ready!");
+
   delay(500);
 
   startAP();
 
-  drawMainLayout();
+  drawMainLayout();  
 }
 
 //----------------------------------------------------------------------
@@ -116,202 +122,223 @@ void loop(void) {
 
   if (oldNumConnected != numConnected) {
     oldNumConnected = numConnected;
-    tft.fillRect(150, 0, 16, 16, TFT_BLACK);
-    tft.setTextColor(TFT_WHITE);  tft.setTextSize(2);
-    tft.setCursor(150, 0);
-    tft.print(numConnected);
+
+    M5.Lcd.fillRect(70, 0, 8, 8, TFT_BLACK);
+    M5.Lcd.setTextColor(TFT_WHITE);  M5.Lcd.setTextSize(1);
+    M5.Lcd.setCursor(70, 0);
+    M5.Lcd.print(numConnected);
   }
 
   if (millis() - lastHeartbeat > heartbeatRate) {
     lastHeartbeat = millis();
     heartbeat();
+    // drawTestLayout();
   }
 }
 
 //----------------------------------------------------------------------
 //Touch functions
 void checkTouch() {
-  uint16_t x, y;
-  tft.getTouch(&x, &y);
+  M5.update();
 
-  if (y > 208 && tft.getTouchRawZ() >= 800) { //is in buttons hight
-    if (x <= 78) { //button 1 (rec)
+  uint8_t btn_a_pressed = M5.BtnA.wasPressed();
+  uint8_t btn_b_pressed = M5.BtnB.wasPressed();
+
+  if (btn_b_pressed) {
+    current_ui_action = ( current_ui_action+1 ) % 4;
+    refreshActionButton();
+  }
+  
+  if (btn_a_pressed) { 
+    if (current_ui_action == 0) { //button 1 (rec)
       if (isRecording) { // stop record pressed
-        sendToCam(SH0, 14);
-        tft.fillRect(27, 212, 23, 23, TFT_BLACK);
-        tft.fillCircle(27 + 11, 212 + 11, 11, TFT_RED); //rec dot
+        sendToCam(SH0, 14);   
+
         isRecording = !isRecording;
         delay(250); //avoid bouncing
       } else { // start record pressed
         sendToCam(SH1, 14);
         if (currentMode == 0) { //if video mode draw stop rect
-          tft.fillRect(27, 212, 23, 23, TFT_BLACK);
-          tft.fillRect(29, 214, 20, 20, TFT_RED); //stop rect
+          
           isRecording = !isRecording;
         }
         delay(250); //avoid bouncing
       }
-    } else if (x >= 81 && x <= 81 + 78) { //button 2 (default mode)
+      refreshActionButton();
+    } else if (current_ui_action == 1) { //button 2 (default mode)
       sendToCam(CMd, 14);
       delay(250); //avoid bouncing
-    } else if (x >= 161 && x <= 161 + 78) { //button 3 (toggle mode)
+    } else if (current_ui_action == 2) { //button 3 (toggle mode)
       sendToCam(PA, 15);
       delay(250); //avoid bouncing
-    } else if (x >= 241 && x <= 319) { //button 4 (power off)
+    } else if (current_ui_action == 3) { //button 4 (power off)
       if (rcOn) {
         for (uint8_t i = 0; i < 6; i++) {
           sendToCam(PW0, 14);
           delay(200); //enough bounce prevention ;)
         }
 
-        stopAP();
-        tft.setTextColor(TFT_RED);  tft.setTextSize(2);
-        tft.fillRect(242, 210, 76, 29, TFT_BLACK);  //Button 4 clear
-        tft.setCursor(263, 217); tft.print("on");  //Button 4 text
+        stopAP();        
       } else {
         startAP();
-        tft.setTextColor(TFT_GREEN);  tft.setTextSize(2);
-        tft.fillRect(242, 210, 76, 29, TFT_BLACK);  //Button 4 clear
-        tft.setCursor(263, 217); tft.print("off");  //Button 4 text
+        
         delay(250); //avoid bouncing
       }
+      refreshActionButton();
     }
   }
 }
 
-void calibrateTouch() { //calibration
-  uint16_t calData[5];
-  uint8_t calDataOK = 0;
-
-  // Calibrate
-  tft.fillScreen(TFT_BLACK);
-  tft.setCursor(20, 0);
-  tft.setTextFont(2);
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-
-  tft.println("Touch corners as indicated");
-
-  tft.setTextFont(1);
-  tft.println();
-
-  tft.calibrateTouch(calData, TFT_MAGENTA, TFT_BLACK, 15);
-
-  Serial.println(); Serial.println();
-  Serial.println("// Use this calibration code in setup():");
-  Serial.print("  uint16_t calData[5] = ");
-  Serial.print("{ ");
-
-  for (uint8_t i = 0; i < 5; i++)
-  {
-    Serial.print(calData[i]);
-    if (i < 4) Serial.print(", ");
-  }
-
-  Serial.println(" };");
-  Serial.print("  tft.setTouch(calData);");
-  Serial.println(); Serial.println();
-
-  tft.fillScreen(TFT_BLACK);
-
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.println("Calibration complete!");
-  tft.println("Calibration code sent to Serial port.");
-
-  delay(1000);
-}
-
 //----------------------------------------------------------------------
 //TFT functions
-void drawMainLayout() {
-  tft.fillScreen(TFT_BLACK); //clear screen
-  tft.setTextColor(TFT_WHITE);  tft.setTextSize(2);
+// Test function for aligning items on screen
+void drawTestLayout() {
+    int i = 0;
+
+    // number of connected gopros
+    M5.Lcd.fillRect(70, 0, 8, 8, TFT_BLACK);
+    M5.Lcd.setTextColor(TFT_WHITE);  M5.Lcd.setTextSize(1);
+    M5.Lcd.setCursor(70, 0);
+    M5.Lcd.print("4");
+
+    // battery level
+    M5.Lcd.fillRect(48, 13, 3*8, 8, TFT_WHITE);
+    M5.Lcd.setTextColor(TFT_BLACK);  M5.Lcd.setTextSize(1);
+    M5.Lcd.setCursor(48 + 0 * 80, 13);
+    M5.Lcd.print("100%");
+
+    // camera mode
+    M5.Lcd.fillRect( 6*6 + i * 80, 37, 6*7, 8, TFT_BLACK);
+    M5.Lcd.setCursor(6*6 + i * 80, 37);
+    M5.Lcd.setTextColor(TFT_WHITE);  M5.Lcd.setTextSize(1);
+    M5.Lcd.print("Video");
+
+    // camera state
+    M5.Lcd.fillRect(1 + i * 80, 53, 6*10, 8, TFT_BLACK);
+    M5.Lcd.setCursor(5 + i * 80, 53);
+    
+    M5.Lcd.setTextColor(TFT_GREEN);  M5.Lcd.setTextSize(1);
+    M5.Lcd.print("ready");
+}
+
+
+void drawMainLayout() {    
+  M5.Lcd.setRotation(0);
+  M5.Lcd.fillScreen(TFT_BLACK); //clear screen
+  M5.Lcd.setTextColor(TFT_WHITE);  M5.Lcd.setTextSize(1);
 
   //header
-  tft.setCursor(4, 0);
-  tft.print("Cams online: ");
+  M5.Lcd.setCursor(4, 0);
+  M5.Lcd.print("Cams conn: 0");
 
-  for (uint8_t i = 0; i < 4; i++) {
-    tft.drawRect(0 + i * 80, 18, 80, 188, TFT_WHITE);    //Cam section outer frame
+  for (uint8_t i = 0; i < maxCams; i++) {
+    M5.Lcd.drawRect(0 + i * 80, 8, 80, 133, TFT_WHITE);   //Cam section outer frame
 
-    tft.fillRect(11 + i * 80, 47, 4, 11, TFT_WHITE);    //accu small rect
-    tft.fillRect(15 + i * 80, 42, 50, 21, TFT_WHITE);   //accu big rect
+    M5.Lcd.fillRect(41 + i * 80,    17,  4,  7, TFT_WHITE);    //accu small rect
+    M5.Lcd.fillRect(45 + i * 80,    13, 30, 15, TFT_WHITE);    //accu big rect
 
-    tft.fillRect(1 + i * 80, 126, 78, 79, TFT_YELLOW); //LCD yellow background rect
+    M5.Lcd.fillRect(1 + i * 80,     65, 78, 75, TFT_YELLOW);   //LCD yellow background rect
 
     //Text
-    tft.setCursor(12 + i * 80, 22);
-    tft.print("Cam ");
-    tft.print(i + 1);
-    tft.setCursor(5 + i * 80, 70);
-    tft.print("Mode:");
-    tft.setCursor(5 + i * 80, 108);
-    tft.print("offl.");
+    M5.Lcd.setCursor(5 + i * 80, 17);
+    M5.Lcd.print("Cam ");
+    M5.Lcd.print(i + 1);
+
+
+    M5.Lcd.setCursor(5 + i * 80, 37);
+    M5.Lcd.print("Mode:");
+
+
+    M5.Lcd.setCursor(5 + i * 80, 53);
+    M5.Lcd.print("offline");    
   }
 
-
   //inner lines
-  tft.drawLine(1, 66, 318, 66, TFT_WHITE);    //first line
-  tft.drawLine(1, 104, 318, 104, TFT_WHITE);    //second line
-  tft.drawLine(1, 125, 318, 125, TFT_WHITE);    //third line
+  M5.Lcd.drawLine(1, 32, 80, 32, TFT_WHITE);    //first line
+  M5.Lcd.drawLine(1, 48, 80, 48, TFT_WHITE);    //second line
+  M5.Lcd.drawLine(1, 64, 80, 64, TFT_WHITE);    //third line
 
   //Buttons
-  tft.drawRect(1, 209, 78, 31, TFT_WHITE);    //Button 1 outer frame
-  tft.fillCircle(27 + 11, 212 + 11, 11, TFT_RED); //Button 1 red rec dot
-  tft.drawRect(81, 209, 78, 31, TFT_WHITE);   //Button 2 outer frame
-  tft.setCursor(92, 217); tft.print("Def M"); //Button 2 text
-  tft.drawRect(161, 209, 78, 31, TFT_WHITE);  //Button 3 outer frame
-  tft.setCursor(172, 217); tft.print("Mode+"); //Button 3 text
-  tft.drawRect(241, 209, 78, 31, TFT_WHITE);  //Button 4 outer frame
-  tft.setCursor(263, 217); tft.print("off");  //Button 4 text
+  M5.Lcd.drawRect(1, 142, 78, 18, TFT_WHITE);    //Button 1 outer frame
+  
+  refreshActionButton();    
+}
+
+void refreshActionButton() {
+  M5.Lcd.fillRect(2, 143, 76, 16, TFT_BLACK);    //Button 1 outer frame
+  if (current_ui_action == 0) {
+
+    if (isRecording) {
+      M5.Lcd.fillRect(34, 145, 10, 10, TFT_RED); //stop rect  
+    } else {      
+      M5.Lcd.fillCircle(34 + 5, 145 + 5, 5, TFT_RED); //Button 1 red rec dot
+    }
+  } else if (current_ui_action == 1) {
+    M5.Lcd.setTextColor(TFT_WHITE);
+    M5.Lcd.setCursor(5, 147); M5.Lcd.print("Def Mode");
+  } else if (current_ui_action == 2) {
+    M5.Lcd.setTextColor(TFT_WHITE);
+    M5.Lcd.setCursor(5, 147); M5.Lcd.print("Mode+");
+  } else if (current_ui_action == 3) {   
+    if (rcOn) {
+      M5.Lcd.setTextColor(TFT_RED);
+      M5.Lcd.setCursor(5, 147); M5.Lcd.print("Pwr off");  
+    } else {
+      M5.Lcd.setTextColor(TFT_GREEN);
+      M5.Lcd.setCursor(5, 147); M5.Lcd.print("Pwr on");  
+    }
+  }
 }
 
 void resetCamSection(uint8_t camIndex) {
   int camOffset = 80 * camIndex;
 
-  tft.fillRect(camOffset, 18, 80, 188, TFT_BLACK); //clear cam section
+  M5.Lcd.fillRect(camOffset, 8, 80, 133, TFT_BLACK); //clear cam section
 
-  tft.setTextColor(TFT_WHITE);  tft.setTextSize(2);
+  M5.Lcd.setTextColor(TFT_WHITE);  M5.Lcd.setTextSize(1);
 
   //outer frame
-  tft.drawRect(camOffset, 18, 80, 188, TFT_WHITE);    //Cam 1 outer frame
+  M5.Lcd.drawRect(camOffset, 8, 80, 133, TFT_WHITE);    //Cam 1 outer frame
 
   //inner lines
-  tft.drawLine(1, 66, 318, 66, TFT_WHITE);    //first line
-  tft.drawLine(1, 104, 318, 104, TFT_WHITE);    //second line
-  tft.drawLine(1, 125, 318, 125, TFT_WHITE);    //third line
+  M5.Lcd.drawLine(1, 32, 80, 32, TFT_WHITE);    //first line
+  M5.Lcd.drawLine(1, 48, 80, 48, TFT_WHITE);    //second line
+  M5.Lcd.drawLine(1, 64, 80, 64, TFT_WHITE);    //third line
 
   //accu symbol
-  tft.fillRect(11 + camOffset, 47, 4, 11, TFT_WHITE);  //accu 1 small rect
-  tft.fillRect(15 + camOffset, 42, 50, 21, TFT_WHITE); //accu 1 big rect
+  M5.Lcd.fillRect(41 + camOffset,    17,  4,  7, TFT_WHITE);    //accu small rect
+  M5.Lcd.fillRect(45 + camOffset,    13, 30, 15, TFT_WHITE);    //accu big rect
 
   //LCD background
-  tft.fillRect(1 + camOffset, 126, 78, 79, TFT_YELLOW); //LCD 1 yellow rect
+  M5.Lcd.fillRect(1 + camOffset,     65, 78, 75, TFT_YELLOW);   //LCD yellow background rect
 
   //Text
-  tft.setCursor(12 + camOffset, 22);
-  tft.print("Cam ");
-  tft.print(camIndex + 1);
+  M5.Lcd.setCursor(5 + camOffset, 17);
+  M5.Lcd.print("Cam ");
+  M5.Lcd.print(camIndex + 1);
 
-  tft.setCursor(5 + camOffset, 70);
-  tft.print("Mode:");
 
-  tft.setCursor(5 + camOffset, 108);
-  tft.print("offl.");
+  M5.Lcd.setCursor(5 + camOffset, 37);
+  M5.Lcd.print("Mode:");
+
+  M5.Lcd.setCursor(5 + camOffset, 53);
+  M5.Lcd.print("offline"); 
 }
 
 void tftPrintLc(uint8_t* lcBuffer, int xpos, int ypos) {
+
   for (int y = 74; y > -1; y--) {
     for (uint8_t x = 0; x < 8; x++) {
       for (uint8_t b = 0; b < 8; b++) {
         if (bitRead(lcBuffer[(x + (y * 8)) + 15], 7 - b)) {
-          tft.drawPixel(x * 8 + b + xpos, 74 - y + ypos, TFT_BLACK);
+          M5.Lcd.drawPixel(x * 8 + b + xpos, 74 - y + ypos, TFT_BLACK);
         } else {
-          tft.drawPixel(x * 8 + b + xpos, 74 - y + ypos, TFT_YELLOW);
+          M5.Lcd.drawPixel(x * 8 + b + xpos, 74 - y + ypos, TFT_YELLOW);
         }
       }
     }
   }
+  
 }
 
 //----------------------------------------------------------------------
@@ -357,7 +384,7 @@ void stopAP() {
 //WiFi functions
 void onStationDisconnected(WiFiEvent_t evt, WiFiEventInfo_t info) {
   for (int i = 0; i < maxCams; i++) {
-    if (memcmp(info.sta_disconnected.mac, cams[i].getMac(), 6) == 0) {
+    if (memcmp(info.wifi_sta_disconnected.bssid, cams[i].getMac(), 6) == 0) {
       if (cams[i].getIp() != 0) {
         cams[i].resetIp();
         resetCamSection(i);
@@ -504,28 +531,29 @@ void receiveFromCam() {
           serialPrintHex(packetBuffer, numBytes);
           Serial.println(">");
         } else if (strstr_P(inCmd, PSTR("lc")) != NULL) { //got screen for RC
-          tftPrintLc(packetBuffer, 10 + i * 80, 127);
+          tftPrintLc(packetBuffer, 10 + i * 80, 66);
         } else if (strstr_P(inCmd, PSTR("st")) != NULL) { //got status
           if (cams[i].camMode != packetBuffer[14]) {
             cams[i].camMode = packetBuffer[14];
-            tft.fillRect(1 + i * 80, 86, 78, 16, TFT_BLACK);
-            tft.setCursor(5 + i * 80, 86);
-            tft.setTextColor(TFT_WHITE);  tft.setTextSize(2);
+
+            M5.Lcd.fillRect( 6*6 + i * 80, 37, 6*7, 8, TFT_BLACK);
+            M5.Lcd.setCursor(6*6 + i * 80, 37);
+            M5.Lcd.setTextColor(TFT_WHITE);  M5.Lcd.setTextSize(1);
             switch (packetBuffer[14]) { //mode
               case 0x0: //video mode
-                tft.print("Video");
+                M5.Lcd.print("Video");
                 currentMode = 0;
                 break;
               case 0x1: //photo mode
-                tft.print("Photo");
+                M5.Lcd.print("Photo");
                 currentMode = 1;
                 break;
               case 0x2: //burst mode
-                tft.print("Burst");
+                M5.Lcd.print("Burst");
                 currentMode = 2;
                 break;
               case 0x3: //timelapse mode
-                tft.print("Timel.");
+                M5.Lcd.print("Timel.");
                 currentMode = 3;
                 break;
             }
@@ -533,16 +561,17 @@ void receiveFromCam() {
 
           if (cams[i].camState != packetBuffer[15]) {
             cams[i].camState = packetBuffer[15];
-            tft.fillRect(1 + i * 80, 108, 78, 16, TFT_BLACK);
-            tft.setCursor(5 + i * 80, 108);
+
+            M5.Lcd.fillRect(1 + i * 80, 53, 6*10, 8, TFT_BLACK);
+            M5.Lcd.setCursor(5 + i * 80, 53);
             switch (packetBuffer[15]) { //status
               case 0x0: //standby
-                tft.setTextColor(TFT_GREEN);  tft.setTextSize(2);
-                tft.print("ready");
+                M5.Lcd.setTextColor(TFT_GREEN);  M5.Lcd.setTextSize(1);
+                M5.Lcd.print("ready");
                 break;
               case 0x1: //recording
-                tft.setTextColor(TFT_RED);  tft.setTextSize(2);
-                tft.print("rec.");
+                M5.Lcd.setTextColor(TFT_RED);  M5.Lcd.setTextSize(1);
+                M5.Lcd.print("rec.");
                 break;
             }
           }
@@ -556,12 +585,13 @@ void receiveFromCam() {
             uint8_t camTime[7] = {packetBuffer[20], packetBuffer[21], packetBuffer[22], packetBuffer[23], packetBuffer[24], packetBuffer[25], packetBuffer[26]};
             cams[i].setCamTime(camTime);
           } else if (packetBuffer[15] == 0x08 && packetBuffer[16] == 0x00) { //got battery level
-            if (cams[i].getBattLevel() != packetBuffer[20]) {
-              tft.fillRect(15 + i * 80, 42, 50, 21, TFT_WHITE);   //accu 1 big rect
-              tft.setTextColor(TFT_BLACK);  tft.setTextSize(2);
-              tft.setCursor(17 + i * 80, 45);
-              tft.print(packetBuffer[20]);
-              tft.print("%");
+            if (cams[i].getBattLevel() != packetBuffer[20]) {              
+              
+              M5.Lcd.fillRect(45 + i * 80,    13, 30, 15, TFT_WHITE); //accu 1 big rect              
+              M5.Lcd.setTextColor(TFT_BLACK);  M5.Lcd.setTextSize(1);
+              M5.Lcd.setCursor(48 + 0 * 80, 17);
+              M5.Lcd.print(packetBuffer[20]);
+              M5.Lcd.print("%");              
               cams[i].setBattLevel(packetBuffer[20]);
             }
           } else { //something else
